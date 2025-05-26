@@ -1,0 +1,208 @@
+🔁 1.Partitions: The Foundation of Distribution
+Hazelcast divides all data into 271 partitions by default (you can configure this).
+
+🔹 How it works:
+Every cache entry (e.g., a brandDto with key BR123) is hashed.
+
+The hash determines which partition it belongs to.
+
+Each partition has one primary and zero or more backups (depending on backup-count config).
+
+🔹 Partition ownership:
+When a node joins the cluster, Hazelcast distributes ownership of these partitions across all nodes.
+
+Partition table example with 3 nodes:
+
+	Partition 0 → Node1 (primary), Node2 (backup)
+	Partition 1 → Node2 (primary), Node3 (backup)
+	Partition 2 → Node3 (primary), Node1 (backup)
+...
+
+
+📘 Configurable:
+
+hazelcast:
+  partition-count: 271
+  map:
+    brandCache:
+      backup-count: 1
+
+
+🚀 2. Routing: Where Your Entry Goes
+
+You call:map.put("BR123", brandDto);
+
+🔹 What Hazelcast does:
+Hashes "BR123" → finds partition P.
+
+Checks which node owns partition P.
+
+If local node owns it → store directly.
+
+If another node owns it → routes write over the wire to the owning node.
+
+Then backups are updated on other nodes (if any).
+
+This is transparent to you. You don’t need to worry about which node owns which key.
+
+
+🔄 3. Rebalancing: Node Join / Leave
+▶️ When a new node joins:
+Hazelcast triggers partition rebalancing.
+
+Existing partitions are redistributed to the new node.
+
+Partition ownership changes are coordinated using internal cluster events.
+
+The new node becomes the primary owner of some partitions, and starts receiving data for those partitions.
+
+Hazelcast ensures eventual consistency using:
+
+Internal replication queues
+
+Anti-entropy (checksum/diff-based sync if needed)
+
+⏹️ When a node leaves/crashes:
+The cluster detects the failure (via heartbeats).
+
+Hazelcast reassigns the lost node’s partitions to other members.
+
+If backups exist:
+
+A backup becomes the new primary owner.
+
+A new backup is assigned and filled asynchronously.
+
+If no backups → data loss for affected partitions.
+
+
+🧠 4. Cluster Formation (Embedded Mode)
+Your apps form a cluster using:
+
+Multicast (default in non-Kubernetes)
+
+TCP/IP discovery (recommended in Kubernetes)
+
+Hazelcast auto-discovers other members on the network and forms a single logical cluster.
+
+In Spring Boot embedded mode:
+
+hazelcast:
+  network:
+    join:
+      multicast:
+        enabled: true
+      tcp-ip:
+        enabled: false
+
+
+Hazelcast will use this to:
+
+Exchange member lists
+
+Maintain cluster state
+
+Gossip metadata, partition table, etc.
+
+
+💥 5. Replication & Fault Tolerance
+You configure how many backups you want:        
+
+hazelcast:
+  map:
+    brandCache:
+      backup-count: 1  # 1 backup = 2 copies total
+
+
+Each write is replicated to the backups synchronously or asynchronously (depending on map config).
+
+In case of failure, Hazelcast promotes backup to primary instantly.
+
+
+📊 6. Tools to Observe This
+Use Hazelcast Management Center (free for local use):
+
+See which partitions belong to which nodes
+
+Monitor cluster health
+
+See map sizes, eviction, TTL, etc.
+
+Start with:
+
+docker run -p 8080:8080 hazelcast/management-center
+
+Then point it to one of your nodes to visualize everything.
+
+
+
+✅ Summary Table
+
+Aspect				Behavior
+=======				=========
+Partition Count		271 default, controls sharding
+Key Placement		Deterministic hash → partition
+Routing				Automatic if partition not local
+Node Join			Partitions redistributed evenly
+Node Leave			Partitions reassigned, backups promoted
+Write Mode			Primary only, backups sync’d
+Read Mode			Routed to local if owner, else remote
+All Nodes Primary?	No, only for keys they own
+Consistency			Strong for primary + sync backups
+Monitoring			Use Hazelcast Management Center
+
+
+
+
+🔐 How to Avoid Stale Reads
+✅ 1. Use synchronous backups
+
+hazelcast:
+  map:
+    brandCache:
+      backup-count: 1
+      async-backup-count: 0  # forces sync
+
+This ensures every write is acknowledged only after backup is updated.
+
+✅ 2. Use IMap.get — always reads from partition owner
+Hazelcast always routes reads to the owner of the partition if you use IMap.get() (even if the call is from another node).
+
+However, if you enable Near Cache, or use entry processors, behavior may vary.
+
+
+✅ 3. Disable or invalidate Near Cache
+If you're using Near Cache:
+
+hazelcast:
+  map:
+    brandCache:
+      near-cache:
+        invalidate-on-change: true
+
+
+✅ 4. Don’t rely on backup reads for critical consistency
+Avoid reading from backups or Near Cache in mission-critical paths where real-time consistency is a must.
+
+⚖️ Tradeoff: Performance vs Consistency
+Asynchronous backups = high performance, lower consistency guarantees
+
+Synchronous backups = stronger consistency, slightly slower writes
+
+
+
+📘 Conclusion
+Hazelcast can return stale reads in embedded mode if:
+
+You use async backups (default)
+
+A backup is promoted to primary prematurely
+
+You're using Near Cache without invalidation
+
+🔒 To maximize consistency:
+Prefer synchronous backups
+
+Avoid Near Cache unless you're using invalidate-on-change
+
+Rely on partition-owner reads, not backup or local-only reads      

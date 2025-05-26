@@ -1,0 +1,16 @@
+{
+  "extends": ["config:base"],
+  "packageRules": [
+    {
+      "matchPaths": ["m1/**", "m2/**"],
+      "groupName": "m1 and m2 dependencies",
+      "groupSlug": "m1-m2"
+    },
+    {
+      "matchPaths": ["m3/**"],
+      "groupName": "m3 dependencies",
+      "groupSlug": "m3"
+    }
+  ],
+  "automerge": false
+}

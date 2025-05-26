@@ -1,0 +1,70 @@
+name: Bump Version and Create PR
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  version-bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Detect Changed Modules
+        id: detect
+        run: |
+          git fetch origin main
+          CHANGED=$(git diff --name-only origin/main HEAD | grep -E '^m[123]/' | cut -d/ -f1 | sort -u | paste -sd "," -)
+          echo "CHANGED_MODULES=$CHANGED" >> $GITHUB_ENV
+          echo "changed_modules=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Create Branch
+        id: branch
+        run: |
+          BRANCH=version-bump-${{ github.run_number }}
+          git checkout -b $BRANCH
+          echo "branch_name=$BRANCH" >> $GITHUB_OUTPUT
+
+      - name: Bump Root Version (for m1/m2)
+        if: contains(env.CHANGED_MODULES, 'm1') || contains(env.CHANGED_MODULES, 'm2')
+        run: |
+          VERSION=$(cat version.txt)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+          echo "$NEXT_VERSION" > version.txt
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add version.txt
+          git commit -m "chore: bump root version to $NEXT_VERSION"
+
+      - name: Bump m3 Version
+        if: contains(env.CHANGED_MODULES, 'm3')
+        run: |
+          VERSION=$(grep '^version=' m3/gradle.properties | cut -d= -f2)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEXT_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+          sed -i "s/version=$VERSION/version=$NEXT_VERSION/" m3/gradle.properties
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add m3/gradle.properties
+          git commit -m "chore: bump m3 version to $NEXT_VERSION"
+
+      - name: Push Branch
+        run: |
+          git push origin ${{ steps.branch.outputs.branch_name }}
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "chore: version bump"
+          commit-message: "chore: version bump"
+          base: main
+          branch: ${{ steps.branch.outputs.branch_name }}
+          body: |
+            This PR bumps versions for: ${{ steps.detect.outputs.changed_modules }}
